@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Corrective Action Tracker</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#edf3f3;color:#183238;font:16px system-ui}header{background:#103b41;color:white;padding:2rem max(1rem,calc((100vw - 1100px)/2))}h1{margin:0}main{max-width:1132px;margin:auto;padding:1rem}.panel{background:white;border:1px solid #d7e3e4;border-radius:12px;padding:1rem;margin:1rem 0}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:1rem}label{display:grid;gap:.35rem}input,textarea,select,button{font:inherit;padding:.55rem;border:1px solid #839da0;border-radius:6px}button{cursor:pointer;background:#106b63;color:white;border:0;margin:.25rem}button.secondary{background:#e2eded;color:#183238}.toolbar{display:flex;gap:.5rem;flex-wrap:wrap;align-items:center}.table{overflow:auto}table{width:100%;border-collapse:collapse}td,th{text-align:left;padding:.65rem;border-bottom:1px solid #d7e3e4;vertical-align:top}td{overflow-wrap:anywhere}summary{cursor:pointer;font-weight:bold}.late{color:#a22d22;font-weight:bold}h2{margin-top:0}#feedback{min-height:1.4em}
+</style>
+</head>
+<body>
+<header><h1>Corrective Action Tracker</h1><p>Record findings, assign actions and verify effectiveness.</p></header>
+<main>
+<section class="panel">
+<h2 id="form-title">New corrective action</h2>
+<form id="record">
+<div class="grid">
+<label>Finding<input name="finding" required maxlength="160"></label>
+<label>Owner<input name="owner" required maxlength="100"></label>
+<label>Due date<input name="due" type="date" required></label>
+<label>Status<select name="status"><option>Open</option><option>In progress</option><option>Awaiting verification</option><option>Closed</option></select></label>
+<label>Root cause<textarea name="cause" maxlength="2000"></textarea></label>
+<label>Corrective action<textarea name="action" maxlength="2000"></textarea></label>
+<label>Effectiveness evidence<textarea name="evidence" maxlength="2000"></textarea></label>
+</div>
+<p><button>Save action</button><button type="button" class="secondary" id="reset">Clear form</button></p>
+</form>
+<p id="feedback" role="status"></p>
+</section>
+<section class="panel">
+<h2>Action register</h2>
+<div class="toolbar">
+<label>Filter status<select id="filter"><option value="">All actions</option><option>Open</option><option>In progress</option><option>Awaiting verification</option><option>Closed</option><option>Overdue</option></select></label>
+<button type="button" id="csv">Export CSV</button><button class="secondary" id="demo">Add sample action</button>
+</div>
+<p id="count"></p>
+<div class="table"><table><thead><tr><th>ID and finding</th><th>Owner</th><th>Due date</th><th>Status</th><th>Details</th><th>Manage</th></tr></thead><tbody></tbody></table></div>
+</section>
+</main>
+<script>
+'use strict';
+const key = 'capa-tracker-v1';
+const form = document.querySelector('#record');
+const feedback = document.querySelector('#feedback');
+const heading = document.querySelector('#form-title');
+const table = document.querySelector('tbody');
+const filter = document.querySelector('#filter');
+const columns = ['id', 'finding', 'owner', 'due', 'status', 'cause', 'action', 'evidence'];
+let records = [];
+let editing = null;
+try {
+  records = JSON.parse(localStorage.getItem(key) ?? '[]');
+  if (!Array.isArray(records)) throw new Error('Invalid saved register');
+} catch {
+  records = [];
+  feedback.textContent = 'Existing records could not be loaded. Export your records before clearing browser data.';
+}
+function today() {
+  const date = new Date();
+  return [date.getFullYear(), date.getMonth() + 1, date.getDate()]
+    .map(part => String(part).padStart(2, '0')).join('-');
+}
+function overdue(row) {
+  return row.status !== 'Closed' && row.due < today();
+}
+function render() {
+  const selected = filter.value;
+  const shown = records.filter(row => !selected || (selected === 'Overdue' ? overdue(row) : row.status === selected));
+  document.querySelector('#count').textContent = shown.length + ' shown · ' + records.filter(overdue).length + ' overdue overall';
+  table.replaceChildren();
+  for (const row of shown) {
+    const line = table.insertRow();
+    for (const value of [row.id + ' · ' + row.finding, row.owner, row.due, row.status]) line.insertCell().textContent = value;
+    if (overdue(row)) line.cells[2].className = 'late';
+    const details = document.createElement('details');
+    const summary = document.createElement('summary');
+    summary.textContent = 'View';
+    details.append(summary);
+    for (const [label, field] of [['Root cause', 'cause'], ['Corrective action', 'action'], ['Effectiveness evidence', 'evidence']]) {
+      const item = document.createElement('p');
+      item.textContent = label + ': ' + (row[field] || 'Pending');
+      details.append(item);
+    }
+    line.insertCell().append(details);
+    const edit = document.createElement('button');
+    edit.textContent = 'Edit';
+    edit.setAttribute('aria-label', 'Edit ' + row.id);
+    edit.onclick = () => {
+      editing = row.id;
+      heading.textContent = 'Edit ' + row.id;
+      for (const field of columns.slice(1)) form.elements.namedItem(field).value = row[field];
+      form.elements.namedItem('finding').focus();
+    };
+    line.insertCell().append(edit);
+  }
+}
+function save(next, message) {
+  try {
+    localStorage.setItem(key, JSON.stringify(next));
+  } catch {
+    feedback.textContent = 'Browser storage is unavailable or full. The action was not saved.';
+    return false;
+  }
+  records = next;
+  feedback.textContent = message;
+  render();
+  return true;
+}
+function clearForm() {
+  editing = null;
+  form.reset();
+  heading.textContent = 'New corrective action';
+}
+function nextId() {
+  const highest = records.reduce((max, row) => Math.max(max, Number(row.id.slice(3)) || 0), 0);
+  return 'CA-' + String(highest + 1).padStart(3, '0');
+}
+form.addEventListener('submit', event => {
+  event.preventDefault();
+  const row = Object.fromEntries([...new FormData(form)].map(([field, value]) => [field, value.trim()]));
+  if (!row.finding || !row.owner) {
+    feedback.textContent = 'Enter a finding and an owner.';
+    return;
+  }
+  if (row.status === 'Closed' && !(row.cause && row.action && row.evidence)) {
+    feedback.textContent = 'Add the root cause, corrective action and effectiveness evidence before closing.';
+    return;
+  }
+  row.id = editing ?? nextId();
+  const next = editing ? records.map(existing => existing.id === editing ? row : existing) : [...records, row];
+  if (save(next, row.id + ' saved.')) clearForm();
+});
+document.querySelector('#reset').onclick = clearForm;
+filter.onchange = render;
+document.querySelector('#demo').onclick = () => {
+  const demo = {id: nextId(), finding: 'Sample: Obsolete work instruction at a packing station',
+    owner: 'Demo quality coordinator', due: today(), status: 'Awaiting verification',
+    cause: 'Document distribution checklist omitted the packing station.',
+    action: 'Update the distribution checklist and replace obsolete copies.', evidence: ''};
+  save([...records, demo], 'Sample action added.');
+};
+function csvCell(value) {
+  let content = String(value ?? '');
+  if (/^[\s]*[=+@-]|^[\t\r\n]/.test(content)) content = "'" + content;
+  return '"' + content.replaceAll('"', '""') + '"';
+}
+document.querySelector('#csv').onclick = () => {
+  const lines = [columns, ...records.map(row => columns.map(field => row[field]))]
+    .map(row => row.map(csvCell).join(',')).join('\r\n');
+  const url = URL.createObjectURL(new Blob(['\uFEFF', lines], {type: 'text/csv;charset=utf-8'}));
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = 'corrective-actions.csv';
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+};
+render();
+</script>
+</body>
+</html>
